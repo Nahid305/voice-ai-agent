@@ -1,4 +1,5 @@
 streamlit
+streamlit-webrtc
 faster-whisper
 groq
 edge-tts

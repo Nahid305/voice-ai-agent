@@ -129,7 +129,7 @@ GROQ_API_KEY = "gsk_your_actual_api_key_here"
 6. Click **Deploy**.
 
 ### Important for Cloud
-- In the app sidebar, keep **Audio Mode** as **Browser (Streamlit Cloud compatible)**.
+- In the app sidebar, use **Audio Mode** = **Browser Live Call (auto voice detect, Streamlit Cloud)**.
 - This mode records voice in the browser and plays responses in the browser (no server microphone/speaker required).
 
 ---
@@ -143,7 +143,8 @@ GROQ_API_KEY = "gsk_your_actual_api_key_here"
    - Look in the sidebar under **⚙️ Settings**
    - Paste your Groq API key
 4. Set **Audio Mode**:
-   - **Browser (Streamlit Cloud compatible)** for Streamlit Cloud
+   - **Browser Live Call (auto voice detect, Streamlit Cloud)** for hands-free cloud call behavior
+   - **Browser Push-to-Talk (manual send)** if your browser blocks live capture
    - **Desktop (local mic + speaker)** for local machine use
 5. Click **Start Call** button
 

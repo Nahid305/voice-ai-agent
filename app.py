@@ -15,7 +15,12 @@ import time
 import os
 import tempfile
 import hashlib
+import threading
+import queue
+import numpy as np
+import scipy.io.wavfile as wav
 from dotenv import load_dotenv
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 
 from utils.audio_recorder import record_audio
 from utils.speech_to_text import transcribe_audio
@@ -41,6 +46,61 @@ def play_browser_audio(audio_bytes: bytes) -> None:
         st.audio(audio_bytes, format="audio/mpeg")
         st.info("Click ▶️ on the audio player to hear the response.")
 
+
+class VADAudioProcessor(AudioProcessorBase):
+    """Collect browser microphone audio and emit chunks when user pauses."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._buffer = []
+        self._utterances = queue.Queue()
+        self._has_voice = False
+        self._silence_frames = 0
+        self._sample_rate = 16000
+
+        self._silence_threshold = 0.012
+        self._silence_frames_to_stop = 24
+        self._min_samples = int(0.5 * self._sample_rate)
+
+    def recv_audio(self, frame):
+        audio = frame.to_ndarray()
+
+        if audio.ndim == 2:
+            mono = audio.mean(axis=0)
+        else:
+            mono = audio
+
+        if mono.dtype != np.int16:
+            mono = np.clip(mono, -32768, 32767).astype(np.int16)
+
+        self._sample_rate = frame.sample_rate or self._sample_rate
+        rms = float(np.sqrt(np.mean(np.square(mono.astype(np.float32))))) / 32768.0
+
+        with self._lock:
+            if rms > self._silence_threshold:
+                self._has_voice = True
+                self._silence_frames = 0
+                self._buffer.append(mono.copy())
+            elif self._has_voice:
+                self._silence_frames += 1
+                self._buffer.append(mono.copy())
+
+            if self._has_voice and self._silence_frames >= self._silence_frames_to_stop:
+                utterance = np.concatenate(self._buffer) if self._buffer else np.array([], dtype=np.int16)
+                if len(utterance) >= self._min_samples:
+                    self._utterances.put((utterance, self._sample_rate))
+                self._buffer = []
+                self._has_voice = False
+                self._silence_frames = 0
+
+        return frame
+
+    def pop_utterance(self):
+        with self._lock:
+            if self._utterances.empty():
+                return None
+            return self._utterances.get()
+
 # ── Load .env (GROQ_API_KEY) ───────────────────────────────────────────
 load_dotenv()
 if not os.environ.get("GROQ_API_KEY", "").strip():
@@ -63,6 +123,7 @@ for key, default in [
     ("ui_messages", []),
     ("needs_greeting", False),
     ("last_audio_hash", ""),
+    ("last_utterance_hash", ""),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -75,7 +136,11 @@ with st.sidebar:
 
     audio_mode = st.selectbox(
         "Audio Mode",
-        ["Browser (Streamlit Cloud compatible)", "Desktop (local mic + speaker)"],
+        [
+            "Browser Live Call (auto voice detect, Streamlit Cloud)",
+            "Browser Push-to-Talk (manual send)",
+            "Desktop (local mic + speaker)",
+        ],
         index=0,
         help="Use Browser mode on Streamlit Cloud. Desktop mode requires local audio hardware on the server.",
     )
@@ -107,6 +172,7 @@ if start_btn:
     st.session_state.ui_messages = []
     st.session_state.needs_greeting = True
     st.session_state.last_audio_hash = ""
+    st.session_state.last_utterance_hash = ""
     st.rerun()
 
 if end_btn:
@@ -115,6 +181,7 @@ if end_btn:
     st.session_state.chat_history = []
     st.session_state.ui_messages = []
     st.session_state.last_audio_hash = ""
+    st.session_state.last_utterance_hash = ""
     st.rerun()
 
 # ── Chat transcript ─────────────────────────────────────────────────────
@@ -143,7 +210,7 @@ if st.session_state.is_calling:
         greeting = "Hello! This is IT support. How can I help you today?"
         st.session_state.ui_messages.append({"role": "assistant", "content": greeting})
         status.success(f"🔊 {greeting}")
-        if audio_mode == "Browser (Streamlit Cloud compatible)":
+        if "Browser" in audio_mode:
             greeting_audio = (
                 synthesize_speech_bytes_fn(greeting)
                 if synthesize_speech_bytes_fn is not None
@@ -162,7 +229,76 @@ if st.session_state.is_calling:
             st.session_state.needs_greeting = False
             st.rerun()
 
-    if audio_mode == "Browser (Streamlit Cloud compatible)":
+    if audio_mode == "Browser Live Call (auto voice detect, Streamlit Cloud)":
+        status.info("🎤 Live mode active. Speak naturally; processing starts when you pause.")
+
+        webrtc_ctx = webrtc_streamer(
+            key="voice-live",
+            mode=WebRtcMode.SENDONLY,
+            media_stream_constraints={"video": False, "audio": True},
+            audio_processor_factory=VADAudioProcessor,
+            async_processing=True,
+        )
+
+        if not webrtc_ctx.state.playing:
+            st.caption("Click **START** on the microphone widget above to begin live conversation.")
+            st.stop()
+
+        if webrtc_ctx.audio_processor is None:
+            st.stop()
+
+        utterance_item = webrtc_ctx.audio_processor.pop_utterance()
+        if utterance_item is None:
+            st.stop()
+
+        utterance_audio, utterance_rate = utterance_item
+        utterance_hash = hashlib.sha256(utterance_audio.tobytes()).hexdigest()
+        if utterance_hash == st.session_state.last_utterance_hash:
+            st.stop()
+
+        st.session_state.last_utterance_hash = utterance_hash
+
+        temp_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+                temp_path = temp_file.name
+            wav.write(temp_path, utterance_rate, utterance_audio)
+
+            status.warning("⏳ Processing your speech …")
+            user_text = transcribe_audio(temp_path)
+
+            if user_text and len(user_text.strip()) > 2:
+                st.session_state.ui_messages.append({"role": "user", "content": user_text})
+                status.info(f"🗣️ You said: _{user_text}_")
+
+                status.info("🧠 AI is thinking …")
+                ai_reply, st.session_state.chat_history = generate_response(
+                    user_text, st.session_state.chat_history
+                )
+                st.session_state.ui_messages.append({"role": "assistant", "content": ai_reply})
+                status.success(f"🔊 {ai_reply}")
+
+                response_audio = (
+                    synthesize_speech_bytes_fn(ai_reply)
+                    if synthesize_speech_bytes_fn is not None
+                    else b""
+                )
+                if response_audio:
+                    play_browser_audio(response_audio)
+                else:
+                    st.warning("Couldn't generate response audio. Try again in a few seconds.")
+            else:
+                status.warning("🤔 Didn't catch that — please speak again.")
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+
+        st.stop()
+
+    if audio_mode == "Browser Push-to-Talk (manual send)":
         status.info("🎤 Record your message below, then submit it.")
         recorded_audio = st.audio_input("Your voice message")
         send_audio = st.button("📤 Send Voice Message", use_container_width=True)
