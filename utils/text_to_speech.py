@@ -6,6 +6,7 @@ import edge_tts
 import asyncio
 import os
 import tempfile
+import threading
 
 
 # Natural-sounding voices (pick one):
@@ -21,6 +22,34 @@ async def _generate_speech(text: str, output_file: str) -> None:
     """Async helper – generates an MP3 from text using Edge TTS."""
     communicate = edge_tts.Communicate(text, VOICE, rate="+5%", pitch="+0Hz")
     await communicate.save(output_file)
+
+
+def _run_async_task(coro) -> None:
+    """Run async coroutine safely across different runtime environments."""
+    try:
+        asyncio.run(coro)
+        return
+    except RuntimeError as exc:
+        if "asyncio.run() cannot be called from a running event loop" not in str(exc):
+            raise
+
+    task_error = {"exception": None}
+
+    def _runner():
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(coro)
+            loop.close()
+        except Exception as thread_exc:
+            task_error["exception"] = thread_exc
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join()
+
+    if task_error["exception"] is not None:
+        raise task_error["exception"]
 
 
 def synthesize_speech_bytes(text: str) -> bytes:
@@ -41,7 +70,7 @@ def synthesize_speech_bytes(text: str) -> bytes:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_file:
             temp_file_path = temp_file.name
 
-        asyncio.run(_generate_speech(text, temp_file_path))
+        _run_async_task(_generate_speech(text, temp_file_path))
 
         with open(temp_file_path, "rb") as file_handle:
             return file_handle.read()
@@ -73,7 +102,7 @@ def speak_text(text: str, language: str = "en") -> None:
         import pygame
 
         # 1. Generate the MP3 with edge-tts (async, but we run it synchronously here)
-        asyncio.run(_generate_speech(text, audio_file))
+        _run_async_task(_generate_speech(text, audio_file))
 
         # 2. Play it via pygame
         pygame.mixer.init()

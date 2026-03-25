@@ -22,6 +22,17 @@ from utils.speech_to_text import transcribe_audio
 from utils.llm_handler import generate_response
 from utils.text_to_speech import speak_text, synthesize_speech_bytes
 
+
+def play_browser_audio(audio_bytes: bytes) -> None:
+    """Render browser audio with autoplay when supported."""
+    if not audio_bytes:
+        return
+    try:
+        st.audio(audio_bytes, format="audio/mpeg", autoplay=True)
+    except TypeError:
+        st.audio(audio_bytes, format="audio/mpeg")
+        st.info("Click ▶️ on the audio player to hear the response.")
+
 # ── Load .env (GROQ_API_KEY) ───────────────────────────────────────────
 load_dotenv()
 if not os.environ.get("GROQ_API_KEY", "").strip():
@@ -123,11 +134,15 @@ if st.session_state.is_calling:
         if audio_mode == "Browser (Streamlit Cloud compatible)":
             greeting_audio = synthesize_speech_bytes(greeting)
             if greeting_audio:
-                st.audio(greeting_audio, format="audio/mp3")
+                play_browser_audio(greeting_audio)
+            else:
+                st.warning("Couldn't generate greeting audio. Check internet connection and try again.")
+            st.session_state.needs_greeting = False
+            st.stop()
         else:
             speak_text(greeting)
-        st.session_state.needs_greeting = False
-        st.rerun()
+            st.session_state.needs_greeting = False
+            st.rerun()
 
     if audio_mode == "Browser (Streamlit Cloud compatible)":
         status.info("🎤 Record your message below, then submit it.")
@@ -165,7 +180,9 @@ if st.session_state.is_calling:
 
                 response_audio = synthesize_speech_bytes(ai_reply)
                 if response_audio:
-                    st.audio(response_audio, format="audio/mp3")
+                    play_browser_audio(response_audio)
+                else:
+                    st.warning("Couldn't generate response audio. Try again in a few seconds.")
             else:
                 status.warning("🤔 Didn't catch that — please try recording again.")
         finally:
