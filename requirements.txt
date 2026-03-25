@@ -1,0 +1,11 @@
+streamlit
+faster-whisper
+groq
+edge-tts
+sounddevice
+numpy
+scipy
+langchain
+python-dotenv
+pygame
+requests
