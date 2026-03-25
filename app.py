@@ -13,15 +13,24 @@ A two-way, call-centre-style voice agent that:
 import streamlit as st
 import time
 import os
+import tempfile
+import hashlib
 from dotenv import load_dotenv
 
 from utils.audio_recorder import record_audio
 from utils.speech_to_text import transcribe_audio
 from utils.llm_handler import generate_response
-from utils.text_to_speech import speak_text
+from utils.text_to_speech import speak_text, synthesize_speech_bytes
 
 # ── Load .env (GROQ_API_KEY) ───────────────────────────────────────────
 load_dotenv()
+if not os.environ.get("GROQ_API_KEY", "").strip():
+    try:
+        secrets_key = st.secrets.get("GROQ_API_KEY", "").strip()
+        if secrets_key:
+            os.environ["GROQ_API_KEY"] = secrets_key
+    except Exception:
+        pass
 
 # ── Page config ─────────────────────────────────────────────────────────
 st.set_page_config(page_title="AI IT Support Voice Agent", page_icon="🎧", layout="wide")
@@ -34,6 +43,7 @@ for key, default in [
     ("chat_history", []),
     ("ui_messages", []),
     ("needs_greeting", False),
+    ("last_audio_hash", ""),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -43,6 +53,13 @@ with st.sidebar:
     st.header("⚙️ Settings")
     st.markdown("Make sure your **microphone** is connected.")
     st.markdown("Get a free API key → [console.groq.com](https://console.groq.com/)")
+
+    audio_mode = st.selectbox(
+        "Audio Mode",
+        ["Browser (Streamlit Cloud compatible)", "Desktop (local mic + speaker)"],
+        index=0,
+        help="Use Browser mode on Streamlit Cloud. Desktop mode requires local audio hardware on the server.",
+    )
 
     api_key_input = st.text_input("Groq API Key (optional if in .env)", type="password")
     if api_key_input:
@@ -54,7 +71,7 @@ with st.sidebar:
     st.markdown("2. Listens until you pause (VAD)")
     st.markdown("3. Transcribes with Faster-Whisper")
     st.markdown("4. AI responds via Groq / Llama-3")
-    st.markdown("5. Speaks response via gTTS")
+    st.markdown("5. Speaks response via Edge TTS")
 
 # ── Buttons ─────────────────────────────────────────────────────────────
 col1, col2 = st.columns(2)
@@ -70,6 +87,7 @@ if start_btn:
     st.session_state.chat_history = []
     st.session_state.ui_messages = []
     st.session_state.needs_greeting = True
+    st.session_state.last_audio_hash = ""
     st.rerun()
 
 if end_btn:
@@ -77,6 +95,7 @@ if end_btn:
     st.session_state.needs_greeting = False
     st.session_state.chat_history = []
     st.session_state.ui_messages = []
+    st.session_state.last_audio_hash = ""
     st.rerun()
 
 # ── Chat transcript ─────────────────────────────────────────────────────
@@ -101,9 +120,62 @@ if st.session_state.is_calling:
         greeting = "Hello! This is IT support. How can I help you today?"
         st.session_state.ui_messages.append({"role": "assistant", "content": greeting})
         status.success(f"🔊 {greeting}")
-        speak_text(greeting)
+        if audio_mode == "Browser (Streamlit Cloud compatible)":
+            greeting_audio = synthesize_speech_bytes(greeting)
+            if greeting_audio:
+                st.audio(greeting_audio, format="audio/mp3")
+        else:
+            speak_text(greeting)
         st.session_state.needs_greeting = False
         st.rerun()
+
+    if audio_mode == "Browser (Streamlit Cloud compatible)":
+        status.info("🎤 Record your message below, then submit it.")
+        recorded_audio = st.audio_input("Your voice message")
+
+        if recorded_audio is None:
+            st.stop()
+
+        audio_bytes = recorded_audio.getvalue()
+        current_audio_hash = hashlib.sha256(audio_bytes).hexdigest()
+        if current_audio_hash == st.session_state.last_audio_hash:
+            st.stop()
+
+        st.session_state.last_audio_hash = current_audio_hash
+
+        temp_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+                temp_file.write(audio_bytes)
+                temp_path = temp_file.name
+
+            status.warning("⏳ Processing your speech …")
+            user_text = transcribe_audio(temp_path)
+
+            if user_text and len(user_text.strip()) > 2:
+                st.session_state.ui_messages.append({"role": "user", "content": user_text})
+                status.info(f"🗣️ You said: _{user_text}_")
+
+                status.info("🧠 AI is thinking …")
+                ai_reply, st.session_state.chat_history = generate_response(
+                    user_text, st.session_state.chat_history
+                )
+                st.session_state.ui_messages.append({"role": "assistant", "content": ai_reply})
+                status.success(f"🔊 {ai_reply}")
+
+                response_audio = synthesize_speech_bytes(ai_reply)
+                if response_audio:
+                    st.audio(response_audio, format="audio/mp3")
+            else:
+                status.warning("🤔 Didn't catch that — please try recording again.")
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+
+        st.stop()
 
     # Step 1 – Listen
     status.info("🎤 Listening … speak now (stops automatically when you pause)")

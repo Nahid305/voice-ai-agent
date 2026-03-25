@@ -2,7 +2,6 @@
 audio_recorder.py - Records audio from the microphone with Voice Activity Detection (VAD).
 Stops recording automatically when the user stops speaking.
 """
-import sounddevice as sd
 import numpy as np
 import scipy.io.wavfile as wav
 import os
@@ -29,6 +28,12 @@ def record_audio(fs=16000, filename="temp_recording.wav", silence_threshold=0.01
         str | None: Path to the WAV file, or None if nothing was recorded.
     """
     audio_queue = queue.Queue()
+
+    try:
+        import sounddevice as sd
+    except Exception as exc:
+        print(f"[audio_recorder] sounddevice unavailable: {exc}")
+        return None
 
     def _stream_callback(indata, frames, time_info, status):
         """Sounddevice callback – pushes each audio block into the queue."""

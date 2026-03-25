@@ -111,6 +111,29 @@ The application will automatically open at `http://localhost:8501`
 
 ---
 
+## ☁️ Deploy on Streamlit Community Cloud
+
+1. Push your latest code to GitHub (already done for this repo).
+2. Go to [share.streamlit.io](https://share.streamlit.io/) and sign in with GitHub.
+3. Click **Create app**.
+4. Select:
+   - **Repository**: `Nahid305/voice-ai-agent`
+   - **Branch**: `main`
+   - **Main file path**: `app.py`
+5. Open **Advanced settings → Secrets** and add:
+
+```toml
+GROQ_API_KEY = "gsk_your_actual_api_key_here"
+```
+
+6. Click **Deploy**.
+
+### Important for Cloud
+- In the app sidebar, keep **Audio Mode** as **Browser (Streamlit Cloud compatible)**.
+- This mode records voice in the browser and plays responses in the browser (no server microphone/speaker required).
+
+---
+
 ## 💬 How to Use
 
 ### Quick Start
@@ -119,7 +142,9 @@ The application will automatically open at `http://localhost:8501`
 3. Add Groq API Key (if not in .env):
    - Look in the sidebar under **⚙️ Settings**
    - Paste your Groq API key
-4. Ensure your microphone is connected
+4. Set **Audio Mode**:
+   - **Browser (Streamlit Cloud compatible)** for Streamlit Cloud
+   - **Desktop (local mic + speaker)** for local machine use
 5. Click **Start Call** button
 
 ### Step-by-Step Usage

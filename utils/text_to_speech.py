@@ -3,9 +3,9 @@ text_to_speech.py - Converts text to speech using Microsoft Edge neural voices.
 Uses edge-tts for natural, human-like voice synthesis (free, no API key needed).
 """
 import edge_tts
-import pygame
 import asyncio
 import os
+import tempfile
 
 
 # Natural-sounding voices (pick one):
@@ -23,6 +23,39 @@ async def _generate_speech(text: str, output_file: str) -> None:
     await communicate.save(output_file)
 
 
+def synthesize_speech_bytes(text: str) -> bytes:
+    """
+    Generates MP3 bytes from text for browser playback.
+
+    Args:
+        text: The sentence to synthesize.
+
+    Returns:
+        MP3 bytes, or empty bytes on failure.
+    """
+    if not text or not text.strip():
+        return b""
+
+    temp_file_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_file:
+            temp_file_path = temp_file.name
+
+        asyncio.run(_generate_speech(text, temp_file_path))
+
+        with open(temp_file_path, "rb") as file_handle:
+            return file_handle.read()
+    except Exception as exc:
+        print(f"[TTS] Error generating bytes: {exc}")
+        return b""
+    finally:
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.remove(temp_file_path)
+            except OSError:
+                pass
+
+
 def speak_text(text: str, language: str = "en") -> None:
     """
     Converts text to speech with a natural-sounding neural voice and plays it.
@@ -37,6 +70,8 @@ def speak_text(text: str, language: str = "en") -> None:
     audio_file = "temp_response.mp3"
 
     try:
+        import pygame
+
         # 1. Generate the MP3 with edge-tts (async, but we run it synchronously here)
         asyncio.run(_generate_speech(text, audio_file))
 
