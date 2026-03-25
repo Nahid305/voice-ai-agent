@@ -20,7 +20,15 @@ from dotenv import load_dotenv
 from utils.audio_recorder import record_audio
 from utils.speech_to_text import transcribe_audio
 from utils.llm_handler import generate_response
-from utils.text_to_speech import speak_text, synthesize_speech_bytes
+
+
+def load_tts_helpers():
+    """Lazy-load TTS helpers to avoid startup import crashes on cloud runtime."""
+    try:
+        from utils.text_to_speech import speak_text, synthesize_speech_bytes
+        return speak_text, synthesize_speech_bytes, None
+    except Exception as exc:
+        return None, None, str(exc)
 
 
 def play_browser_audio(audio_bytes: bytes) -> None:
@@ -126,20 +134,31 @@ if st.session_state.is_calling:
         st.session_state.is_calling = False
         st.stop()
 
+    speak_text_fn, synthesize_speech_bytes_fn, tts_import_error = load_tts_helpers()
+    if tts_import_error:
+        st.warning(f"TTS module unavailable right now: {tts_import_error}")
+
     # Step 0 – Greeting (first turn only)
     if st.session_state.needs_greeting:
         greeting = "Hello! This is IT support. How can I help you today?"
         st.session_state.ui_messages.append({"role": "assistant", "content": greeting})
         status.success(f"🔊 {greeting}")
         if audio_mode == "Browser (Streamlit Cloud compatible)":
-            greeting_audio = synthesize_speech_bytes(greeting)
+            greeting_audio = (
+                synthesize_speech_bytes_fn(greeting)
+                if synthesize_speech_bytes_fn is not None
+                else b""
+            )
             if greeting_audio:
                 play_browser_audio(greeting_audio)
             else:
                 st.warning("Couldn't generate greeting audio. Check internet connection and try again.")
             st.session_state.needs_greeting = False
         else:
-            speak_text(greeting)
+            if speak_text_fn is not None:
+                speak_text_fn(greeting)
+            else:
+                st.info("Desktop voice playback is unavailable in this session.")
             st.session_state.needs_greeting = False
             st.rerun()
 
@@ -183,7 +202,11 @@ if st.session_state.is_calling:
                 st.session_state.ui_messages.append({"role": "assistant", "content": ai_reply})
                 status.success(f"🔊 {ai_reply}")
 
-                response_audio = synthesize_speech_bytes(ai_reply)
+                response_audio = (
+                    synthesize_speech_bytes_fn(ai_reply)
+                    if synthesize_speech_bytes_fn is not None
+                    else b""
+                )
                 if response_audio:
                     play_browser_audio(response_audio)
                 else:
@@ -223,7 +246,10 @@ if st.session_state.is_calling:
 
             # Step 4 – Speak
             status.success(f"🔊 {ai_reply}")
-            speak_text(ai_reply)
+            if speak_text_fn is not None:
+                speak_text_fn(ai_reply)
+            else:
+                st.info("Desktop voice playback is unavailable in this session.")
         else:
             status.warning("🤔 Didn't catch that — let's try again.")
             time.sleep(1)
