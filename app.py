@@ -138,7 +138,6 @@ if st.session_state.is_calling:
             else:
                 st.warning("Couldn't generate greeting audio. Check internet connection and try again.")
             st.session_state.needs_greeting = False
-            st.stop()
         else:
             speak_text(greeting)
             st.session_state.needs_greeting = False
@@ -147,13 +146,19 @@ if st.session_state.is_calling:
     if audio_mode == "Browser (Streamlit Cloud compatible)":
         status.info("🎤 Record your message below, then submit it.")
         recorded_audio = st.audio_input("Your voice message")
+        send_audio = st.button("📤 Send Voice Message", use_container_width=True)
 
         if recorded_audio is None:
+            st.caption("Record a message first, then click **Send Voice Message**.")
+            st.stop()
+
+        if not send_audio:
             st.stop()
 
         audio_bytes = recorded_audio.getvalue()
         current_audio_hash = hashlib.sha256(audio_bytes).hexdigest()
         if current_audio_hash == st.session_state.last_audio_hash:
+            st.warning("This recording was already sent. Please record a new message.")
             st.stop()
 
         st.session_state.last_audio_hash = current_audio_hash
